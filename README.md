@@ -1,1 +1,1 @@
-# authorise-dot-net-for-paymattic
+# authorize-dot-net-for-paymattic
