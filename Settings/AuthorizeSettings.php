@@ -203,7 +203,7 @@ class AuthorizeSettings extends BasePaymentMethod
     {
         AccessControl::checkAndPresponseError('set_payment_settings', 'global');
         $mode = Arr::get($settings, 'payment_mode');
-
+        
         if ($mode == 'test') {
             if (empty(Arr::get($settings, 'test_api_login_id')) || empty(Arr::get($settings, 'test_transaction_key'))) {
                 $errors['test_api_key'] = __('Please provide Api Login Id and Transaction key', 'authorize-dot-net-for-paymattic');
@@ -218,21 +218,28 @@ class AuthorizeSettings extends BasePaymentMethod
         return $errors;
     }
 
-    public function isLive($formId = false)
+    public static function isLive($formId = false)
     {
-        $settings = $this->getSettings();
+        $settings = static::getSettings();
         return $settings['payment_mode'] == 'live';
     }
 
-    public function getApiKey($formId = false)
+    public static function getApiKeys($formId = false)
     {
-        $isLive = $this->isLive($formId);
-        $settings = $this->getSettings();
-
+        $isLive = static::isLive($formId);
+        $settings = static::getSettings();
+        // dd($settings);
         if ($isLive) {
-            return $settings['live_api_key'];
+            return array(
+                'api_login_id' => Arr::get($settings, 'live_api_login_id'),
+                'transaction_key' => Arr::get($settings, 'live_transaction_key'),
+                'api_url' => 'https://api.authorize.net/xml/v1/request.api'
+            );
         }
-
-        return $settings['test_api_key'];
+        return array(
+            'api_login_id' => Arr::get($settings, 'test_api_login_id'),
+            'transaction_key' => Arr::get($settings, 'test_transaction_key'),
+            'api_url' => "https://apitest.authorize.net/xml/v1/request.api"
+        );
     }
 }

@@ -69,11 +69,12 @@ class AuthorizeElement extends BaseComponent
     public function validateApi()
     {
         $authorize = new AuthorizeSettings();
-        return $authorize->getApiKey();
+        return $authorize->getApiKeys();
     }
 
     public function render($element, $form, $elements)
     {
+        do_action('wppayform_load_checkout_js_authorize');
         if (!$this->validateApi()) { ?>
             <p style="color: red">You did not configure Authorize.net payment gateway. Please configure authorize.net payment
                 gateway from <b>Paymattic->Payment Gateway->Authorize.net Settings</b> to start accepting payments</p>
@@ -85,6 +86,7 @@ class AuthorizeElement extends BaseComponent
 
     public function renderForMultiple($paymentSettings, $form, $elements)
     {
+        do_action('wppayform_load_checkout_js_authorize');
         $component = $this->component();
         $component['id'] = 'authorize_gateway_element';
         $component['field_options'] = $paymentSettings;

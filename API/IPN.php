@@ -94,22 +94,22 @@ class IPN
 
     public function makeApiCall($path, $args, $formId, $method = 'GET')
     {
-        $apiKey = (new AuthorizeSettings())->getApiKey($formId);
-        // we are using basic authentication , we will use the api key as username and password empty so add : at the end
-        $basicAuthCred = $apiKey . ':';
-        $basicAuthCred = base64_encode($basicAuthCred);
-
+        $apiKeys = (new AuthorizeSettings())->getApiKeys($formId);
         $headers = [
-            'Authorization' => 'Basic ' . $basicAuthCred
+            'Accept' => 'application/json',
+            'Content-type' => 'application/json'
         ];
+        $api_url = Arr::get($apiKeys, 'api_url');
+        $args = json_encode($args, true);
+        // dd($api_url, $args, site_url());
 
         if ($method == 'POST') {
-            $response = wp_remote_post('https://test.authorize.net/' . $path, [
+            $response = wp_remote_post($api_url . $path, [
                 'headers' => $headers,
                 'body' => $args
             ]);
         } else {
-            $response = wp_remote_get('https://accept.authorize.net/' . $path, [
+            $response = wp_remote_get($api_url . $path, [
                 'headers' => $headers,
                 'body' => $args
             ]);
@@ -120,9 +120,10 @@ class IPN
         }
 
         $body = wp_remote_retrieve_body($response);
+        $body = preg_replace('/^[\x{FEFF}]+/u', '', $body);
         $responseData = json_decode($body, true);
-
-        if (empty($responseData['id'])) {
+        
+        if (empty($responseData['token'])) {
             $message = Arr::get($responseData, 'detail');
             if (!$message) {
                 $message = Arr::get($responseData, 'error.message');

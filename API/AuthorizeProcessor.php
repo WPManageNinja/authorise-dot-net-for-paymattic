@@ -6,6 +6,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
 }
 
+use AuthorizeDotNetForPaymattic\Settings\AuthorizeSettings;
 use WPPayForm\Framework\Support\Arr;
 use WPPayForm\App\Models\Transaction;
 use WPPayForm\App\Models\Form;
@@ -33,7 +34,8 @@ class AuthorizeProcessor
         (new \AuthorizeDotNetForPaymattic\API\IPN())->init();
 
         add_filter('wppayform/choose_payment_method_for_submission', array($this, 'choosePaymentMethod'), 10, 4);
-        add_action('wppayform/form_submission_make_payment_xendit', array($this, 'makeFormPayment'), 10, 6);
+        add_action('wppayform/form_submission_make_payment_authorize', array($this, 'makeFormPayment'), 10, 6);
+        add_action('wppayform_load_checkout_js_' . $this->method, array($this, 'addCheckoutJs'), 10);
         // add_action('wppayform_payment_frameless_' . $this->method, array($this, 'handleSessionRedirectBack'));
         add_filter('wppayform/entry_transactions_' . $this->method, array($this, 'addTransactionUrl'), 10, 2);
         // add_action('wppayform_ipn_xendit_action_refunded', array($this, 'handleRefund'), 10, 3);
@@ -94,6 +96,12 @@ class AuthorizeProcessor
         $this->handleRedirect($transaction, $submission, $form, $paymentMode);
     }
 
+    public function addCheckoutJs($settings)
+    {
+        wp_enqueue_script('paystack', 'https://js.paystack.co/v1/inline.js', [], WPPAYFORM_VERSION);
+        wp_enqueue_script('wppayform_authorize_handler', WPPAYFORM_URL . 'assets/js/authorize-handler.js', ['jquery'], WPPAYFORM_VERSION);
+    }
+
     private function getSuccessURL($form, $submission)
     {
         // Check If the form settings have success URL
@@ -133,48 +141,85 @@ class AuthorizeProcessor
         $successUrl = $this->getSuccessURL($form, $submission);
         $shoudSendEmail = true;
         // we need to change according to the payment gateway documentation
-        $paymentArgs = array(
-            'external_id' => $submission->submission_hash,
-            'amount' => number_format((float) $transaction->payment_total / 100, 2, '.', ''),
-            'description' => $form->post_title,
-            'payer_email' => $submission->customer_email,
-            'invoice_duration' => 86400,
-            // 'should_send_email' => $shoudSendEmail,
-            'success_redirect_url' => $successUrl,
-            'currency' => $submission->currency,
-            'locale' => 'en',
+        //Get Hosted Payment Page Request
+        $apiKeys = (new AuthorizeSettings())->getApiKeys($form->ID);
+        $getHostedPaymentPageRequest = array(
+            "getHostedPaymentPageRequest" => array(
+                "merchantAuthentication" => array(
+                    "name" => $apiKeys['api_login_id'],
+                    "transactionKey" => $apiKeys['transaction_key'],
+                ),
+                "transactionRequest" => array(
+                    "transactionType" => "authCaptureTransaction",
+                    "amount" => number_format((float) $transaction->payment_total / 100, 2, '.', ''),
+                    "customer" => array(
+                        "email" => $submission->customer_email
+                    ),
+                ),
+                'hostedPaymentSettings' => array(
+                    'setting' => array(
+                        array(
+                            "settingName" => "hostedPaymentReturnOptions",
+                            "settingValue" => "{\"showReceipt\": true, \"url\": \"".site_url()."\", \"urlText\": \"Continue\", \"cancelUrl\": \"".site_url()."\", \"cancelUrlText\": \"Cancel\"}"
+                        ),
+                        array(
+                            "settingName" => "hostedPaymentButtonOptions",
+                            "settingValue" => "{\"text\": \"Pay\"}"
+                        ),
+                        array(
+                            "settingName" => "hostedPaymentStyleOptions",
+                            "settingValue" => "{\"bgColor\": \"blue\"}"
+                        ),
+                        array(
+                            "settingName" => "hostedPaymentPaymentOptions",
+                            "settingValue" => "{\"cardCodeRequired\": true}"
+                        ),
+                        array(
+                            "settingName" => "hostedPaymentSecurityOptions",
+                            "settingValue" => "{\"captcha\": false}"
+                        ),
+                        array(
+                            "settingName" => "hostedPaymentShippingAddressOptions",
+                            "settingValue" => "{\"show\": false, \"required\": false}"
+                        ),
+                        array(
+                            "settingName" => "hostedPaymentBillingAddressOptions",
+                            "settingValue" => "{\"show\": true, \"required\": false}"
+                        )
+                    )
+                )
+            ),
         );
 
-        $paymentArgs = apply_filters('wppayform_xendit_payment_args', $paymentArgs, $submission, $transaction, $form);
-        $invoice = (new IPN())->makeApiCall('invoices', $paymentArgs, $form->ID, 'POST');
+        // $paymentArgs = apply_filters('wppayform_xendit_payment_args', $paymentArgs, $submission, $transaction, $form);
+        $acceptPaymentPage = (new IPN())->makeApiCall('', $getHostedPaymentPageRequest, $form->ID, 'POST');
 
-        if (is_wp_error($invoice)) {
-            $message = $invoice->error_data[423]['message'];
+        if (is_wp_error($acceptPaymentPage)) {
+            $message = $acceptPaymentPage->error_data[423]['message'];
             wp_send_json_error(array('message' => $message), 423);
         }
 
-        $invoiceId = Arr::get($invoice, 'id');
-        $status = Arr::get($invoice, 'status');
+        $token = Arr::get($acceptPaymentPage, 'token');
 
-        $transactionModel = new Transaction();
-        $transactionModel->updateTransaction($transaction->id, array(
-            'status' => strtolower($status),
-            'charge_id' => $invoiceId,
-            'payment_mode' => $this->getPaymentMode($submission->form_id)
-        ));
+        // $transactionModel = new Transaction();
+        // $transactionModel->updateTransaction($transaction->id, array(
+        //     'status' => strtolower($status),
+        //     'charge_id' => $invoiceId,
+        //     'payment_mode' => $this->getPaymentMode($submission->form_id)
+        // ));
 
-        if (is_wp_error($invoice)) {
+        if (is_wp_error($acceptPaymentPage)) {
             do_action('wppayform_log_data', [
                 'form_id' => $submission->form_id,
                 'submission_id'        => $submission->id,
                 'type' => 'activity',
                 'created_by' => 'Paymattic BOT',
                 'title' => 'xendit Payment Redirect Error',
-                'content' => $invoice->get_error_message()
+                'content' => $acceptPaymentPage->get_error_message()
             ]);
 
             wp_send_json_success([
-                'message'      => $invoice->get_error_message()
+                'message'      => $acceptPaymentPage->get_error_message()
             ], 423);
         }
 
